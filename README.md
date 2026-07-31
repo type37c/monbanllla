@@ -8,7 +8,8 @@
 できていません。monban は、願いを機械執行の契約に変え、主張と事実のあいだに門を立てます。
 
 番頭([banto](https://github.com/type37c/bantollla))が帳場を守るなら、門番は門を守ります。
-同じ「番」の字を分け合う、対の道具です。
+同じ「番」の字を分け合う、対の道具です。台帳(大福帳)は banto が持ち、
+門は monban が立てる — **門は交換可能、台帳は一つ**、という役割分担です。
 
 ## 契約(守る不変量 — 三条)
 
@@ -57,10 +58,20 @@ declare した actor と同じ actor による verify は、型と実行時の�
 ## 形
 
 - **local-first。** サーバーも、アカウントも、Web API も要りません
-- **banto-kernel をクレート依存**し、追記台帳の型と鎖検査を輸入します。
-  門は交換可能、台帳は一つ、という構図です
+- **[bantollla](https://github.com/type37c/bantollla) の banto-kernel をクレート依存**し、
+  追記台帳の型と鎖検査を輸入します。台帳の契約は
+  [banto 契約 v1](https://github.com/type37c/bantollla/blob/main/docs/contract_v1.md) に凍結済みです
 - 凍結すべき API は三つ: **契約ファイル形式・台帳イベントスキーマ・MCP ツール名**。
   API = 契約が、文字どおり成立します
+
+## 前身の実証
+
+この門は思いつきではありません。bantollla の
+[otel-gate-demo](https://github.com/type37c/bantollla/tree/main/examples/otel-gate-demo) /
+[otel-gate-demo2](https://github.com/type37c/bantollla/tree/main/examples/otel-gate-demo2) に、
+三点セットの実録が公開のまま残っています — 独立 Collector(証人席)、actor 分離
+(作業体・境界の運用者・検証者)、そして**捏造された「できました」が門で fail した台帳そのもの**。
+monban は、この実証を再現手順の束から、誰でも据えられる道具に変えるものです。
 
 ## 三つの口
 
@@ -89,4 +100,4 @@ v0 設計凍結(2026-07-31)。コードより先に、この契約を立てま�
 
 ## License
 
-Apache-2.0
+Apache-2.0。関連技術は特許出願済みで、特許ライセンスの範囲は Apache-2.0 §3 の定めによります。
