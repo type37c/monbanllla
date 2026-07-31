@@ -10,7 +10,9 @@
 - **契約より先にコードを書かない。** 凍結すべき API は三つ:
   契約ファイル形式・台帳イベントスキーマ・MCP ツール名。API = 契約である
 - 台帳の型と鎖検査は [bantollla](https://github.com/type37c/bantollla) の banto-kernel を
-  輸入する。台帳の契約は banto 契約 v1(`docs/contract_v1.md`)。自前の台帳を発明しない
+  輸入する。台帳の契約は banto 契約 v1
+  (bantollla の [docs/contract_v1.md](https://github.com/type37c/bantollla/blob/main/docs/contract_v1.md)
+  — このリポジトリには置かない)。自前の台帳を発明しない
 
 ## あなたが門に検分される側なら
 

@@ -1,5 +1,9 @@
 # monban — 門番
 
+> **状態: v0 設計凍結(2026-07-31)。コードはまだありません。**
+> これは、コードより先に立てた契約です。実装は banto-kernel 依存で着手前です。
+> (リポジトリ名は monbanllla、製品名は monban — 姉妹店 bantollla / banto と同じ対応です)
+
 **門番は、エージェントとの契約を機械が執行する門である。
 契約に書かれた証拠なしには、いかなる完了主張も通らない。**
 
@@ -13,7 +17,7 @@
 
 ## 契約(守る不変量 — 三条)
 
-このリポジトリのすべてのコードは、次の三条に仕えます。三条に反する変更は入りません。
+このリポジトリに入るすべてのコードは、次の三条に仕えます。三条に反する変更は入りません。
 
 **第一条 — 証拠なしの主張は通らない。**
 要約・自己評価・会話ログは証拠になりません。機械検査可能な独立源の証拠のみが
@@ -97,7 +101,21 @@ monban は、この実証を再現手順の束から、誰でも据えられる�
 ## 状態
 
 v0 設計凍結(2026-07-31)。コードより先に、この契約を立てました。
+設計への異議・質問は Issues へどうぞ。三条そのものへの反対も、理由が添えてあれば歓迎します。
+
+## English
+
+**monban** ("gatekeeper") is the sister tool of
+[banto](https://github.com/type37c/bantollla): a gate that machine-enforces
+contracts with AI agents. No completion claim passes without the evidence the
+contract names. Three invariants: evidence or no pass; the declaring actor can
+never verify itself; claims, evidence, and verdicts live in an append-only,
+hash-chained ledger. Design-frozen, **pre-code** — implementation will build on
+the `banto-kernel` crate. Japanese-first; issues in English are welcome.
 
 ## License
 
 Apache-2.0。関連技術は特許出願済みで、特許ライセンスの範囲は Apache-2.0 §3 の定めによります。
+実装コードは banto と同じく Apache-2.0 で公開する方針で、公開されたコードには
+§3 の特許許諾が伴います。隠すより先に書いておきます
+(bantollla の「出自について、正直に」も参照)。
