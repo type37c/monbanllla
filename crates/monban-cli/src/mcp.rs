@@ -115,15 +115,20 @@ fn call_declare(ws: &Ws, args: &Value) -> Result<String, String> {
             "この口はエージェント向け。actor は agent: で始まること(実際: \"{actor}\")"
         ));
     }
+    // 型の合わない要素を黙って捨てない — 捨てた分だけ証拠が細るのは三条一に反する。
     let evidence: Vec<PathBuf> = args
         .get("evidence")
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()
-                .filter_map(|x| x.as_str().map(PathBuf::from))
-                .collect()
+                .map(|x| {
+                    x.as_str()
+                        .map(PathBuf::from)
+                        .ok_or_else(|| format!("evidence の要素が文字列ではない: {x}"))
+                })
+                .collect::<Result<Vec<_>, String>>()
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| Ok(Vec::new()))?;
     let event = declare_claim(ws, &seki, &title, &evidence, actor)?;
     Ok(format!(
         "✓ 記録 seq={} type=claim.declare id={}\n\

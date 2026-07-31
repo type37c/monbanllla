@@ -432,6 +432,79 @@ title = "裏付けがあり、かつ検査が通る"
 }
 
 #[test]
+fn otel_without_attrs_match_is_rejected_at_load() {
+    // 在否だけの otel は成果物と結ばれない — stub span 一本で通る関は門ではない
+    let contract = r#"
+schema = "monban/0"
+
+[[seki]]
+name = "o"
+title = "在否のみ"
+
+  [[seki.evidence]]
+  kind = "otel"
+  vault = "vault.jsonl"
+  span = "s"
+"#;
+    let ws = workspace(contract);
+    monban(&ws.0)
+        .arg("contract")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("attrs_match"));
+}
+
+#[test]
+fn otel_verify_fails_when_declared_copy_is_corrupted() {
+    // objects/ の写しを、目撃値を仕込んだ別内容で上書きする(蔵への細工)。
+    // 再ハッシュ検査が最後の防壁 — ファイル名の sha256 を信じない
+    let ws = workspace(OTEL_CONTRACT);
+    write_vault(&ws.0, &["4106"]);
+    let id = declare_with(&ws.0, "report-honest", "合計: 9999 行\n");
+    let claim = events(&ws.0).into_iter().next().unwrap();
+    std::fs::write(
+        ws.0.join("ledger/objects").join(&claim.evidence[0].sha256),
+        "合計: 4106 行(すり替え)\n",
+    )
+    .unwrap();
+    let out = monban(&ws.0).args(["verify", &id]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let ev = events(&ws.0);
+    let verify = ev.last().unwrap();
+    assert_eq!(verify.body["verdict"], "fail");
+    assert!(verify.body["reason"].as_str().unwrap().contains("合わない"));
+}
+
+#[test]
+fn otel_verify_fails_for_foreign_declare_without_artifacts() {
+    // monban 以外の口(kernel 直書き等)から入った、body.artifacts の無い宣言。
+    // 突き合わせる成果物写しがゼロ → attrs_match は何にも一致できず fail(閉じて落ちる)
+    let ws = workspace(OTEL_CONTRACT);
+    write_vault(&ws.0, &["4106"]);
+    let ledger = banto_kernel::Ledger::open(&ws.0.join("ledger/ledger.jsonl")).unwrap();
+    let ev = ledger
+        .append(banto_kernel::Draft {
+            ts: None,
+            actor: "tester".into(),
+            event_type: "claim.declare".into(),
+            body: serde_json::json!({"title": "x", "seki": "report-honest"}),
+            evidence: vec![banto_kernel::Evidence {
+                sha256: banto_kernel::hash_bytes(b"x"),
+                uri: None,
+                media_type: None,
+                bytes: None,
+            }],
+            op: None,
+        })
+        .unwrap();
+    let out = monban(&ws.0).args(["verify", &ev.id]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let events_after = events(&ws.0);
+    let verify = events_after.last().unwrap();
+    assert_eq!(verify.body["verdict"], "fail");
+}
+
+#[test]
 fn otel_check_is_presence_only_and_writes_nothing() {
     let ws = workspace(OTEL_CONTRACT);
     write_vault(&ws.0, &["only-in-vault-not-in-any-artifact"]);

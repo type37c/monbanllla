@@ -192,6 +192,106 @@ fn dry_run_checks_presence_and_defers_matching() {
     assert!(run.transcript.contains("予行"));
 }
 
+// ---- 規則1の形の執行: 有効な JSON でも ExportTraceServiceRequest の形でなければ通らない ----
+
+#[test]
+fn non_otlp_shaped_json_lines_do_not_pass() {
+    let good = otlp_line(
+        "read_sources",
+        &[("lines.total", serde_json::json!({"intValue": "4106"}))],
+    );
+    let attrs = vec!["lines.total".to_string()];
+    for bad in [
+        r#"{"resourceSpans": "not-an-array"}"#,
+        "12345",
+        "[1, 2]",
+        r#"{"resourceSpans": [{"scopeSpans": {"x": 1}}]}"#,
+    ] {
+        let v = vault(&[good.clone(), bad.to_string()]);
+        let run = examine_otel(&v.0, "read_sources", &attrs, Some(&art("合計: 4106 行\n")));
+        assert!(!run.ok, "形の壊れた行 {bad} が素通しされた");
+        assert!(run.transcript.contains("形ではない"), "{}", run.transcript);
+    }
+}
+
+#[test]
+fn empty_request_line_is_valid_shape() {
+    // {} は正当な空の ExportTraceServiceRequest — 形の検査では落ちない
+    let good = otlp_line(
+        "read_sources",
+        &[("lines.total", serde_json::json!({"intValue": "4106"}))],
+    );
+    let v = vault(&[good, "{}".to_string()]);
+    let attrs = vec!["lines.total".to_string()];
+    let run = examine_otel(&v.0, "read_sources", &attrs, Some(&art("合計: 4106 行\n")));
+    assert!(run.ok, "{}", run.transcript);
+}
+
+// ---- 属性間の集約は AND: 一つでも一致しなければ通らない ----
+
+#[test]
+fn one_mismatched_attr_among_several_fails() {
+    let v = vault(&[otlp_line(
+        "read_sources",
+        &[
+            ("files.read", serde_json::json!({"intValue": "13"})),
+            ("lines.total", serde_json::json!({"intValue": "4106"})),
+        ],
+    )]);
+    let attrs = vec!["files.read".to_string(), "lines.total".to_string()];
+    // 13 は成果物に現れるが 4106 が現れない → fail
+    let run = examine_otel(&v.0, "read_sources", &attrs, Some(&art("13 ファイル\n")));
+    assert!(!run.ok, "{}", run.transcript);
+    assert!(run.transcript.contains("✓ span[0] files.read"));
+    assert!(run.transcript.contains("✗ span[0] lines.total"));
+}
+
+// ---- 証跡は一致箇所の行を引用する(人間の裁可の材料) ----
+
+#[test]
+fn transcript_quotes_the_matching_line() {
+    let v = vault(&[otlp_line(
+        "read_sources",
+        &[("lines.total", serde_json::json!({"intValue": "4106"}))],
+    )]);
+    let attrs = vec!["lines.total".to_string()];
+    let run = examine_otel(
+        &v.0,
+        "read_sources",
+        &attrs,
+        Some(&art("# レポート\n\n合計: 4106 行(13 ファイル)\n")),
+    );
+    assert!(run.ok);
+    assert!(
+        run.transcript.contains("「合計: 4106 行(13 ファイル)」"),
+        "{}",
+        run.transcript
+    );
+}
+
+/// 既知の限界の明文化(docs/otel_evidence_v0.md「証明しない(その二)」):
+/// 部分文字列一致の向きは一方(目撃値 → 成果物)なので、目撃されていない数字を
+/// 成果物に書き足すこと(見出しの嘘+目撃値のデコイ併記)は機械では止まらない。
+/// この検分は pass するが、証跡の引用が「どこで一致したか」を人間の目に届ける。
+/// この挙動を黙って「修正」して文書と食い違わせないための留め針。
+#[test]
+fn decoy_echo_passes_and_is_a_documented_limitation() {
+    let v = vault(&[otlp_line(
+        "read_sources",
+        &[("lines.total", serde_json::json!({"intValue": "4106"}))],
+    )]);
+    let attrs = vec!["lines.total".to_string()];
+    let run = examine_otel(
+        &v.0,
+        "read_sources",
+        &attrs,
+        Some(&art("合計: 9999 行\n\n(付記: 中間計数 4106)\n")),
+    );
+    assert!(run.ok, "{}", run.transcript);
+    // 引用があるので、人間は 4106 が見出しでなく付記で一致したことを読める
+    assert!(run.transcript.contains("「(付記: 中間計数 4106)」"));
+}
+
 #[test]
 fn spans_are_found_across_lines_and_resource_groups() {
     let two_groups = serde_json::json!({

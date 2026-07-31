@@ -178,6 +178,86 @@ fn gate_actor_is_refused() {
 }
 
 #[test]
+fn non_string_evidence_element_is_refused() {
+    // 型の合わない要素を黙って捨てると証拠が細る — 明示に止まる(三条一)
+    let ws = workspace();
+    let res = session(
+        &ws.0,
+        &[
+            init(),
+            call(
+                1,
+                "monban.declare",
+                serde_json::json!({
+                "seki": "tests-pass", "title": "x",
+                "evidence": ["seika.md", 42], "actor": "agent:claude"}),
+            ),
+        ],
+    );
+    assert_eq!(res[1]["result"]["isError"], true, "{}", res[1]);
+    assert!(res[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("文字列ではない"));
+    assert!(events(&ws.0).is_empty());
+}
+
+#[test]
+fn mcp_declare_then_otel_verify_roundtrip() {
+    // MCP で宣言 → CLI の改めで otel 検分が pass する往復。
+    // body.artifacts のラベルと写しの対応が MCP 経由でも成立することを固定する
+    let ws = workspace();
+    std::fs::write(
+        ws.0.join("monban.toml"),
+        "schema = \"monban/0\"\n\n[[seki]]\nname = \"report-honest\"\ntitle = \"裏付け\"\n\n  [[seki.evidence]]\n  kind = \"otel\"\n  vault = \"vault.jsonl\"\n  span = \"read_sources\"\n  attrs_match = [\"lines.total\"]\n",
+    )
+    .unwrap();
+    let line = serde_json::json!({"resourceSpans": [{"scopeSpans": [{"spans": [{
+        "name": "read_sources",
+        "attributes": [{"key": "lines.total", "value": {"intValue": "4106"}}]
+    }]}]}]})
+    .to_string();
+    std::fs::write(ws.0.join("vault.jsonl"), line + "\n").unwrap();
+    std::fs::write(ws.0.join("seika.md"), "合計: 4106 行\n").unwrap();
+    let res = session(
+        &ws.0,
+        &[
+            init(),
+            call(
+                1,
+                "monban.declare",
+                serde_json::json!({
+                "seki": "report-honest", "title": "レポートを書いた",
+                "evidence": ["seika.md"], "actor": "agent:claude"}),
+            ),
+        ],
+    );
+    assert_eq!(res[1]["result"]["isError"], false, "{}", res[1]);
+    let text = res[1]["result"]["content"][0]["text"].as_str().unwrap();
+    let id = text
+        .split("id=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+    let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("monban"))
+        .args(["verify", id])
+        .current_dir(&ws.0)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let ev = events(&ws.0);
+    let verify = ev.last().unwrap();
+    assert_eq!(verify.body["verdict"], "pass");
+    assert_eq!(verify.body["checks"][0]["kind"], "otel");
+}
+
+#[test]
 fn there_is_no_verify_tool() {
     let ws = workspace();
     let res = session(

@@ -178,6 +178,13 @@ fn parse_evidence(v: &toml::Value, seki: &str) -> Result<EvidenceReq> {
                     }
                 }
             }
+            // span の在否だけでは成果物と何も結ばれない(stub span 一本で通ってしまう)。
+            // 突き合わせの無い otel は門ではない — 執行規則1と同じ理由でロード時に拒む。
+            if attrs_match.is_empty() {
+                return Err(MonbanError::Invalid(format!(
+                    "関 {seki}: otel は attrs_match(1件以上)必須 — 在否だけの関は成果物と結ばれない"
+                )));
+            }
             Ok(EvidenceReq::Otel {
                 vault,
                 span,

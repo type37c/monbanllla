@@ -60,7 +60,13 @@ pub fn examine_otel(
                 return done(false, 0, t);
             }
         };
-        collect_spans(&v, span_name, &mut spans);
+        if let Err(why) = collect_spans(&v, span_name, &mut spans) {
+            t.push_str(&format!(
+                "✗ 蔵の行 {} が ExportTraceServiceRequest の形ではない: {why}\n",
+                i + 1
+            ));
+            return done(false, 0, t);
+        }
     }
     t.push_str(&format!("span \"{span_name}\": {} 本\n", spans.len()));
     if spans.is_empty() {
@@ -81,14 +87,16 @@ pub fn examine_otel(
                 Some((_, None)) => Err("属性値が非スカラー(v0.3 はスカラーのみ)".into()),
                 Some((_, Some(v))) if v.is_empty() => Err("属性値が空(空は突き合わせ不能)".into()),
                 Some((_, Some(v))) => match artifacts.iter().find(|(_, text)| text.contains(v)) {
-                    Some((label, _)) => Ok((v.clone(), label.clone())),
+                    Some((label, text)) => Ok((v.clone(), label.clone(), quote_match(text, v))),
                     None => Err(format!("値 \"{v}\" がどの成果物写しにも現れない")),
                 },
             };
             match verdict {
-                Ok((v, label)) => {
+                Ok((v, label, quote)) => {
+                    // 一致箇所の行を証跡に引用する — 部分文字列一致は「目撃値が成果物の
+                    // どこかに在る」ことしか言えないため、どこで一致したかを人の目に届ける。
                     t.push_str(&format!(
-                        "✓ span[{si}] {name} = \"{v}\" — 成果物 {label} に一致\n"
+                        "✓ span[{si}] {name} = \"{v}\" — 成果物 {label} に一致: 「{quote}」\n"
                     ));
                 }
                 Err(why) => {
@@ -104,23 +112,59 @@ pub fn examine_otel(
     done(ok, spans.len(), t)
 }
 
+/// 一致箇所を含む行を引用用に切り出す(長い行は一致値の前後で刈り込む)。
+fn quote_match(text: &str, value: &str) -> String {
+    let line = text
+        .lines()
+        .find(|l| l.contains(value))
+        .unwrap_or(value)
+        .trim();
+    if line.chars().count() <= 120 {
+        return line.to_string();
+    }
+    let pos = line.find(value).unwrap_or(0);
+    let start = line
+        .char_indices()
+        .map(|(i, _)| i)
+        .rfind(|&i| i <= pos.saturating_sub(40))
+        .unwrap_or(0);
+    let tail: String = line[start..].chars().take(120).collect();
+    format!("…{tail}…")
+}
+
 /// OTLP/JSON の resourceSpans[].scopeSpans[].spans[] から名前の合う span の属性を集める。
+/// 検分規則1の執行: 有効な JSON でも ExportTraceServiceRequest の形に合わない行は
+/// Err で返し、蔵ごと「通らない」へ倒す(形の壊れた行を不可視にしない)。
 /// 属性値は正規化文字列(string はそのまま/int・double は十進表記/bool は true・false)。
 /// 非スカラー(array/kvlist/bytes)は None で残し、突き合わせ時に「通らない」へ倒す。
-fn collect_spans(v: &serde_json::Value, name: &str, out: &mut Vec<Vec<(String, Option<String>)>>) {
-    let arr = |v: &serde_json::Value, key: &str| -> Vec<serde_json::Value> {
-        v.get(key)
-            .and_then(|x| x.as_array())
-            .cloned()
-            .unwrap_or_default()
+fn collect_spans(
+    v: &serde_json::Value,
+    name: &str,
+    out: &mut Vec<Vec<(String, Option<String>)>>,
+) -> Result<(), String> {
+    // 欄が無いのは可(空の ExportTraceServiceRequest は正当)。在るのに型が違うのは不可。
+    let arr = |v: &serde_json::Value, key: &str| -> Result<Vec<serde_json::Value>, String> {
+        match v.get(key) {
+            None => Ok(Vec::new()),
+            Some(x) => x
+                .as_array()
+                .cloned()
+                .ok_or_else(|| format!("{key} が配列ではない")),
+        }
     };
-    for rs in arr(v, "resourceSpans") {
-        for ss in arr(&rs, "scopeSpans") {
-            for span in arr(&ss, "spans") {
+    if !v.is_object() {
+        return Err("行の最上位がオブジェクトではない".into());
+    }
+    for rs in arr(v, "resourceSpans")? {
+        for ss in arr(&rs, "scopeSpans")? {
+            for span in arr(&ss, "spans")? {
+                if !span.is_object() {
+                    return Err("spans の要素がオブジェクトではない".into());
+                }
                 if span.get("name").and_then(|n| n.as_str()) != Some(name) {
                     continue;
                 }
-                let attrs = arr(&span, "attributes")
+                let attrs = arr(&span, "attributes")?
                     .iter()
                     .filter_map(|a| {
                         let key = a.get("key")?.as_str()?.to_string();
@@ -131,6 +175,7 @@ fn collect_spans(v: &serde_json::Value, name: &str, out: &mut Vec<Vec<(String, O
             }
         }
     }
+    Ok(())
 }
 
 /// OTLP/JSON の AnyValue をスカラーの正規化文字列へ。intValue は仕様上 JSON 文字列で
