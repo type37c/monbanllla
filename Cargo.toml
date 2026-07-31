@@ -10,4 +10,4 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # 台帳の型と鎖検査は banto-kernel を輸入する(自前の台帳を発明しない)。
 # rev 固定 = どの kernel に依存したかを鎖で留める。crates.io 公開は契約が固まってから。
-banto-kernel = { git = "https://github.com/type37c/bantollla", rev = "321190db812b663b1bae31b45e76af25c701ba99" }
+banto-kernel = { git = "https://github.com/type37c/bantollla", rev = "e3719f9cbe28ed0d4c4bc6099371ebb9400e2907" }
