@@ -1,7 +1,8 @@
 # monban — 門番
 
-> **状態: v0 設計凍結(2026-07-31)。コードはまだありません。**
-> これは、コードより先に立てた契約です。実装は banto-kernel 依存で着手前です。
+> **状態: v0.1 — 証拠タイプ第1号(toolchain)の門が動きます。**
+> 契約(このREADMEと [docs/contract_format_v0.md](docs/contract_format_v0.md))を先に凍結し、
+> コードがそれに従っています。OTel 証拠と MCP の口は次段(名前のみ凍結済み)。
 > (リポジトリ名は monbanllla、製品名は monban — 姉妹店 bantollla / banto と同じ対応です)
 
 **門番は、エージェントとの契約を機械が執行する門である。
@@ -79,28 +80,68 @@ monban は、この実証を再現手順の束から、誰でも据えられる�
 
 ## 三つの口
 
-1. **エージェント向け — MCP ツール `declare`。** 主張と証拠参照の提出。唯一の入口です
+1. **エージェント向け — MCP ツール `monban.declare`。** 主張と証拠参照の提出。唯一の入口です
+   (v0.1 では名前のみ凍結。実装までは CLI の `monban declare` が同じ役を務めます)
 2. **証拠の搬入。** 門番自身がツールチェーンを実行します(cargo build / test 等 —
    コンパイラは説得できない独立検分者です)。加えて OTel span を読みます
-   (span は証拠の器、独立コレクタは証人席です)。検分は門番という別 actor の仕事なので、
-   ここで第二条の actor 分離が自然に成立します
+   (span は証拠の器、独立コレクタは証人席です。v0.1 では予約)。
+   検分は門番という別 actor の仕事なので、ここで第二条の actor 分離が自然に成立します
 3. **人間向け — CLI。** 改めの結果の閲覧と、上書き裁可です
+
+## 使い方(v0.1)
+
+banto のワークスペース(`banto init` した場所)に、契約 `monban.toml` を置きます。
+台帳は banto のものをそのまま使います — 台帳は一つ、門は交換可能。
+
+```sh
+git clone https://github.com/type37c/monbanllla
+cargo install --path monbanllla/crates/monban-cli   # バイナリ名は monban
+
+cd あなたの作業場   # banto init 済みの場所
+cat > monban.toml <<'EOF'
+schema = "monban/0"
+
+[[seki]]
+name = "tests-pass"
+title = "テストが通っている"
+
+  [[seki.evidence]]
+  kind = "toolchain"
+  cmd = ["cargo", "test", "--workspace"]
+EOF
+
+monban contract                 # 契約の検分(証拠のない関はここで拒まれる)
+monban check                    # 予行(台帳には書かない)
+
+# エージェント(または人)が関を名指しで宣言する。証拠なしでは通らない
+monban declare tests-pass "テストが通りました" --evidence report.md --actor agent:claude
+
+# 改めは門番自身の仕事。ツールチェーンを自分で走らせ、判定を台帳に刻む
+monban verify <宣言のイベントID>
+#  → 手形(pass)か、止まる(fail)か。証跡は蔵(ledger/objects/)に残る
+```
+
+30秒のデモそのもの: `--evidence` を付けずに declare すれば**その場で止まり**、
+台帳には何も残りません。契約を後から通りやすいものに差し替えて verify しても、
+宣言時の契約ハッシュとの不一致で **fail が記帳されます**。
 
 ## 証拠タイプ
 
-- 第1号: **ツールチェーンの終了コード+出力ハッシュ**(門番が自分で走らせたもののみ)
-- 第2号: **OTel span**(エージェントの実行過程の証言)
+- 第1号: **ツールチェーンの終了コード+出力ハッシュ**(門番が自分で走らせたもののみ)— v0.1 で実装済み
+- 第2号: **OTel span**(エージェントの実行過程の証言)— 契約形式に予約済み、実装は次段
 
-## 30秒のデモ(目標)
+## 30秒のデモ
 
 エージェント「テストが通りました」→ 門番が手形を要求 → ツールチェーン実行の証拠なし
 → **止まる**。
 
-自信を持った偽完了が止まる瞬間が、この道具の一点突破です。
+自信を持った偽完了が止まる瞬間が、この道具の一点突破です。v0.1 の統合テストは
+この止まる瞬間そのもの(証拠なし宣言の拒否・自己改めの拒否・契約差し替えの検出)を
+実バイナリで検めています(`crates/monban-cli/tests/cli.rs`)。
 
 ## 状態
 
-v0 設計凍結(2026-07-31)。コードより先に、この契約を立てました。
+v0 設計凍結・v0.1 実装(2026-07-31)。コードより先に契約を立て、コードがそれに従いました。
 設計への異議・質問は Issues へどうぞ。三条そのものへの反対も、理由が添えてあれば歓迎します。
 
 ## English
@@ -110,8 +151,10 @@ v0 設計凍結(2026-07-31)。コードより先に、この契約を立てま�
 contracts with AI agents. No completion claim passes without the evidence the
 contract names. Three invariants: evidence or no pass; the declaring actor can
 never verify itself; claims, evidence, and verdicts live in an append-only,
-hash-chained ledger. Design-frozen, **pre-code** — implementation will build on
-the `banto-kernel` crate. Japanese-first; issues in English are welcome.
+hash-chained ledger. v0.1 ships a working gate for toolchain evidence (the
+gatekeeper runs your test suite itself — compilers can't be persuaded), built
+on the `banto-kernel` crate. OTel-span evidence and the MCP entry point are
+reserved next steps. Japanese-first; issues in English are welcome.
 
 ## License
 

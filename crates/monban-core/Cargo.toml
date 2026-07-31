@@ -1,0 +1,12 @@
+[package]
+name = "monban-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "monban の芯: 契約(monban.toml)の読み込みと、関(seki)の機械執行"
+publish = false
+
+[dependencies]
+banto-kernel.workspace = true
+toml = "0.8"
+thiserror = "2"
