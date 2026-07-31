@@ -8,6 +8,8 @@ use monban_core::{Contract, EvidenceReq, GATE_ACTOR};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod mcp;
+
 type R<T> = Result<T, String>;
 
 #[derive(Parser)]
@@ -51,6 +53,8 @@ enum Cmd {
         /// 対象の claim.declare のイベント ID(64桁)
         claim_id: String,
     },
+    /// MCP の口を stdio で立てる(ツールは monban.declare ただ一つ。docs/mcp_v0.md)
+    Mcp,
 }
 
 struct Ws {
@@ -215,18 +219,21 @@ fn cmd_check(ws: &Ws, seki: Option<&str>) -> R<i32> {
     Ok(if all_ok { 0 } else { 1 })
 }
 
-fn cmd_declare(
+/// 宣言の芯。CLI と MCP の口が共用する(規則は口によらず同じ — 三条一・三条二)。
+fn declare_claim(
     ws: &Ws,
     seki: &str,
     title: &str,
     evidence: &[PathBuf],
-    actor: Option<&str>,
-) -> R<i32> {
-    let actor = actor.map(str::to_owned).unwrap_or_else(|| ws.actor.clone());
+    actor: String,
+) -> R<banto_kernel::Envelope> {
     if actor == GATE_ACTOR {
         return Err(format!(
             "門番({GATE_ACTOR})は宣言しない。宣言と改めの actor は必ず別である(三条二)"
         ));
+    }
+    if evidence.is_empty() {
+        return Err("宣言には成果物そのものの証拠が最低1件必要(三条一)".into());
     }
     let contract = load_contract(&ws.root)?;
     contract.find_seki(seki).map_err(|e| e.to_string())?;
@@ -242,7 +249,7 @@ fn cmd_declare(
         .map_err(|e| format!("monban.toml を読めない: {e}"))?;
     ev.push(store_bytes(ws, &contract_raw, "application/toml")?);
     let ledger = ws.ledger().map_err(|e| e.to_string())?;
-    let event = ledger
+    ledger
         .append(banto_kernel::Draft {
             ts: None,
             actor,
@@ -256,7 +263,18 @@ fn cmd_declare(
             evidence: ev,
             op: None,
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
+
+fn cmd_declare(
+    ws: &Ws,
+    seki: &str,
+    title: &str,
+    evidence: &[PathBuf],
+    actor: Option<&str>,
+) -> R<i32> {
+    let actor = actor.map(str::to_owned).unwrap_or_else(|| ws.actor.clone());
+    let event = declare_claim(ws, seki, title, evidence, actor)?;
     println!(
         "✓ 記録 seq={} type=claim.declare id={}",
         event.seq, event.id
@@ -384,6 +402,7 @@ fn main() -> ExitCode {
                 cmd_declare(&ws, seki, title, evidence, actor.as_deref())
             }
             Cmd::Verify { claim_id } => cmd_verify(&discover(cli.root.as_deref(), None)?, claim_id),
+            Cmd::Mcp => mcp::serve(&discover(cli.root.as_deref(), None)?).map(|()| 0),
         }
     })();
     match result {
