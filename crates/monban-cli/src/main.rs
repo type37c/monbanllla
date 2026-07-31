@@ -180,13 +180,81 @@ fn cmd_contract(ws: &Ws) -> R<i32> {
                 EvidenceReq::Toolchain { cmd, expect_exit } => {
                     println!("  toolchain: {} (expect exit {expect_exit})", cmd.join(" "));
                 }
+                EvidenceReq::Otel {
+                    vault,
+                    span,
+                    attrs_match,
+                } => {
+                    println!(
+                        "  otel: span \"{span}\" in {vault} (attrs_match: {})",
+                        if attrs_match.is_empty() {
+                            "なし — 在否のみ".into()
+                        } else {
+                            attrs_match.join(", ")
+                        }
+                    );
+                }
             }
         }
     }
     Ok(0)
 }
 
-fn run_seki(contract: &Contract, name: &str, root: &Path) -> R<Vec<monban_core::ToolchainRun>> {
+/// 1件の証拠要件の検分結果。種類によらず「通ったか・証跡・台帳に書く形」を揃える。
+enum Run {
+    Tool(monban_core::ToolchainRun),
+    Otel(monban_core::OtelRun),
+}
+
+impl Run {
+    fn ok(&self) -> bool {
+        match self {
+            Run::Tool(r) => r.ok,
+            Run::Otel(r) => r.ok,
+        }
+    }
+    fn transcript(&self) -> &str {
+        match self {
+            Run::Tool(r) => &r.transcript,
+            Run::Otel(r) => &r.transcript,
+        }
+    }
+    fn check_json(&self) -> serde_json::Value {
+        match self {
+            Run::Tool(r) => serde_json::json!({
+                "cmd": r.cmd.join(" "),
+                "exit": r.exit,
+                "ok": r.ok,
+            }),
+            Run::Otel(r) => serde_json::json!({
+                "kind": "otel",
+                "vault": r.vault,
+                "span": r.span,
+                "spans_found": r.spans_found,
+                "ok": r.ok,
+            }),
+        }
+    }
+    fn label(&self) -> String {
+        match self {
+            Run::Tool(r) => format!(
+                "{} (exit {})",
+                r.cmd.join(" "),
+                r.exit.map_or("signal".into(), |c| c.to_string())
+            ),
+            Run::Otel(r) => format!("otel span \"{}\"(蔵 {})", r.span, r.vault),
+        }
+    }
+}
+
+/// 関の全証拠要件を検分する。`artifacts` は宣言時に蔵へ写された成果物の(ラベル, 本文)—
+/// otel の attrs_match が使う。None は予行(check)。
+fn run_seki(
+    contract: &Contract,
+    name: &str,
+    root: &Path,
+    artifacts: Option<&[(String, String)]>,
+) -> R<Vec<Run>> {
     let seki = contract.find_seki(name).map_err(|e| e.to_string())?;
     let mut runs = Vec::new();
     for req in &seki.evidence {
@@ -194,7 +262,25 @@ fn run_seki(contract: &Contract, name: &str, root: &Path) -> R<Vec<monban_core::
             EvidenceReq::Toolchain { cmd, expect_exit } => {
                 let run = monban_core::run_toolchain(cmd, *expect_exit, root)
                     .map_err(|e| format!("実行できない: {}: {e}", cmd.join(" ")))?;
-                runs.push(run);
+                runs.push(Run::Tool(run));
+            }
+            EvidenceReq::Otel {
+                vault,
+                span,
+                attrs_match,
+            } => {
+                let p = Path::new(vault);
+                let path = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    root.join(p)
+                };
+                runs.push(Run::Otel(monban_core::examine_otel(
+                    &path,
+                    span,
+                    attrs_match,
+                    artifacts,
+                )));
             }
         }
     }
@@ -209,11 +295,10 @@ fn cmd_check(ws: &Ws, seki: Option<&str>) -> R<i32> {
     };
     let mut all_ok = true;
     for name in &names {
-        for run in run_seki(&contract, name, &ws.root)? {
-            let mark = if run.ok { "✓" } else { "✗" };
-            let exit = run.exit.map_or("signal".into(), |c| c.to_string());
-            println!("{mark} 関 {name}: {} (exit {exit})", run.cmd.join(" "));
-            all_ok &= run.ok;
+        for run in run_seki(&contract, name, &ws.root, None)? {
+            let mark = if run.ok() { "✓" } else { "✗" };
+            println!("{mark} 関 {name}: {}", run.label());
+            all_ok &= run.ok();
         }
     }
     Ok(if all_ok { 0 } else { 1 })
@@ -311,25 +396,52 @@ fn cmd_verify(ws: &Ws, claim_id: &str) -> R<i32> {
     let declared_contract = claim.body.get("contract").and_then(|v| v.as_str());
     let contract_swapped = declared_contract.is_some_and(|h| h != contract.sha256);
 
+    // otel の突き合わせ先は宣言時に蔵(objects/)へ写された成果物 — 作業ツリーは見ない。
+    // 写しが無い・壊れているは誤りではなく「通らない」(証拠の消失を機械で捕まえる)。
+    let seki_has_otel = contract.find_seki(&seki_name).is_ok_and(|s| {
+        s.evidence
+            .iter()
+            .any(|e| matches!(e, EvidenceReq::Otel { .. }))
+    });
+    let artifacts_or_fail: Result<Vec<(String, String)>, String> = if seki_has_otel {
+        let names: Vec<String> = claim
+            .body
+            .get("artifacts")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names
+            .iter()
+            .zip(&claim.evidence)
+            .map(|(name, e)| {
+                let data = std::fs::read(ws.root.join(&ws.objects_rel).join(&e.sha256))
+                    .map_err(|_| format!("宣言時の成果物の写しが蔵(objects/)に無い: {name}"))?;
+                if banto_kernel::hash_bytes(&data) != e.sha256 {
+                    return Err(format!("成果物の写しがハッシュと合わない: {name}"));
+                }
+                Ok((name.clone(), String::from_utf8_lossy(&data).into_owned()))
+            })
+            .collect()
+    } else {
+        Ok(Vec::new())
+    };
+
     let (verdict, reason, runs) = if contract_swapped {
         (
             "fail",
             Some("契約ファイル(monban.toml)が宣言時から差し替わっている".to_string()),
             Vec::new(),
         )
+    } else if let Err(lost) = &artifacts_or_fail {
+        ("fail", Some(lost.clone()), Vec::new())
     } else {
-        let runs = run_seki(&contract, &seki_name, &ws.root)?;
-        let failed: Vec<String> = runs
-            .iter()
-            .filter(|r| !r.ok)
-            .map(|r| {
-                format!(
-                    "{} (exit {})",
-                    r.cmd.join(" "),
-                    r.exit.map_or("signal".into(), |c| c.to_string())
-                )
-            })
-            .collect();
+        let artifacts = artifacts_or_fail.as_deref().unwrap_or(&[]);
+        let runs = run_seki(&contract, &seki_name, &ws.root, Some(artifacts))?;
+        let failed: Vec<String> = runs.iter().filter(|r| !r.ok()).map(Run::label).collect();
         if failed.is_empty() {
             ("pass", None, runs)
         } else {
@@ -344,12 +456,8 @@ fn cmd_verify(ws: &Ws, claim_id: &str) -> R<i32> {
     let mut ev = Vec::new();
     let mut checks = Vec::new();
     for run in &runs {
-        ev.push(store_bytes(ws, run.transcript.as_bytes(), "text/plain")?);
-        checks.push(serde_json::json!({
-            "cmd": run.cmd.join(" "),
-            "exit": run.exit,
-            "ok": run.ok,
-        }));
+        ev.push(store_bytes(ws, run.transcript().as_bytes(), "text/plain")?);
+        checks.push(run.check_json());
     }
     let mut body = serde_json::json!({
         "claim": claim.id,

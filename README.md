@@ -1,8 +1,9 @@
 # monban — 門番
 
-> **状態: v0.2 — toolchain 証拠の門と、エージェント向け MCP の口が動きます。**
+> **状態: v0.3 — toolchain / OTel の二つの証拠タイプと、エージェント向け MCP の口が動きます。**
 > 契約([docs/contract_format_v0.md](docs/contract_format_v0.md)・[docs/mcp_v0.md](docs/mcp_v0.md))を
-> 先に凍結し、コードがそれに従っています。OTel 証拠は次段(契約形式に予約済み)。
+> 先に凍結し、コードがそれに従っています。OTel 検分の規則は
+> [docs/otel_evidence_v0.md](docs/otel_evidence_v0.md)。
 > (リポジトリ名は monbanllla、製品名は monban — 姉妹店 bantollla / banto と同じ対応です)
 
 **門番は、エージェントとの契約を機械が執行する門である。
@@ -85,11 +86,12 @@ monban は、この実証を再現手順の束から、誰でも据えられる�
    存在させません** — エージェントに判を渡さないことが、第二条の執行です([docs/mcp_v0.md](docs/mcp_v0.md))
 2. **証拠の搬入。** 門番自身がツールチェーンを実行します(cargo build / test 等 —
    コンパイラは説得できない独立検分者です)。加えて OTel span を読みます
-   (span は証拠の器、独立コレクタは証人席です。v0.1 では予約)。
+   (span は証拠の器、独立コレクタは証人席です。v0.3 で実装 —
+   蔵は Collector file exporter の OTLP/JSON 行、規則は [docs/otel_evidence_v0.md](docs/otel_evidence_v0.md))。
    検分は門番という別 actor の仕事なので、ここで第二条の actor 分離が自然に成立します
 3. **人間向け — CLI。** 改めの結果の閲覧と、上書き裁可です
 
-## 使い方(v0.1)
+## 使い方(v0.3)
 
 banto のワークスペース(`banto init` した場所)に、契約 `monban.toml` を置きます。
 台帳は banto のものをそのまま使います — 台帳は一つ、門は交換可能。
@@ -133,7 +135,10 @@ monban verify <宣言のイベントID>
 ## 証拠タイプ
 
 - 第1号: **ツールチェーンの終了コード+出力ハッシュ**(門番が自分で走らせたもののみ)— v0.1 で実装済み
-- 第2号: **OTel span**(エージェントの実行過程の証言)— 契約形式に予約済み、実装は次段
+- 第2号: **OTel span**(エージェントの実行過程の証言)— v0.3 で実装済み。
+  独立コレクタの蔵にある span と、宣言時に写された成果物を門番が突き合わせます。
+  「やったか」は otel、「動くか」は toolchain — 同じ関に AND で並べるのが正しい使い方です
+  ([docs/otel_evidence_v0.md](docs/otel_evidence_v0.md))
 
 ## 30秒のデモ
 
@@ -146,7 +151,7 @@ monban verify <宣言のイベントID>
 
 ## 状態
 
-v0 設計凍結・v0.2 実装(2026-07-31)。コードより先に契約を立て、コードがそれに従いました。
+v0 設計凍結・v0.2 実装・v0.3 で OTel 証拠(2026-07-31)。コードより先に契約を立て、コードがそれに従いました。
 設計への異議・質問は Issues へどうぞ。三条そのものへの反対も、理由が添えてあれば歓迎します。
 
 ## English
@@ -156,12 +161,13 @@ v0 設計凍結・v0.2 実装(2026-07-31)。コードより先に契約を立て
 contracts with AI agents. No completion claim passes without the evidence the
 contract names. Three invariants: evidence or no pass; the declaring actor can
 never verify itself; claims, evidence, and verdicts live in an append-only,
-hash-chained ledger. v0.2 ships a working gate for toolchain evidence (the
-gatekeeper runs your test suite itself — compilers can't be persuaded) and an
-MCP entry point for agents (`monban mcp`; the single tool `monban.declare` —
-there is deliberately no verify tool for agents, ever). Built on the
-`banto-kernel` crate; OTel-span evidence is the reserved next step.
-Japanese-first; issues in English are welcome.
+hash-chained ledger. v0.3 ships two evidence kinds — toolchain (the gatekeeper
+runs your test suite itself — compilers can't be persuaded) and OTel spans (the
+gatekeeper reads an independent collector's vault and cross-checks span
+attributes against the artifacts copied at declare time) — plus an MCP entry
+point for agents (`monban mcp`; the single tool `monban.declare` — there is
+deliberately no verify tool for agents, ever). Built on the `banto-kernel`
+crate. Japanese-first; issues in English are welcome.
 
 ## License
 

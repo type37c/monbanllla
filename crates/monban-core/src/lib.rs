@@ -5,9 +5,11 @@
 
 pub mod contract;
 pub mod gate;
+pub mod otel;
 
 pub use contract::{Contract, EvidenceReq, Seki, SCHEMA};
 pub use gate::{run_toolchain, ToolchainRun};
+pub use otel::{examine_otel, OtelRun};
 
 /// 門番が台帳に書くときの actor 名。宣言(declare)には決して使えない —
 /// 門番は改める側であり、自分の仕事に自分で判を押す構図を型で塞ぐ。

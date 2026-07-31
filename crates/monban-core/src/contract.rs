@@ -27,6 +27,12 @@ pub struct Seki {
 pub enum EvidenceReq {
     /// 門番が自分で走らせるツールチェーン。持ち込みの実行結果は数えない。
     Toolchain { cmd: Vec<String>, expect_exit: i32 },
+    /// 独立コレクタの蔵にある OTel span。検分の規則は docs/otel_evidence_v0.md。
+    Otel {
+        vault: String,
+        span: String,
+        attrs_match: Vec<String>,
+    },
 }
 
 impl Contract {
@@ -143,9 +149,41 @@ fn parse_evidence(v: &toml::Value, seki: &str) -> Result<EvidenceReq> {
                 .unwrap_or(0) as i32;
             Ok(EvidenceReq::Toolchain { cmd, expect_exit })
         }
-        "otel" => Err(MonbanError::Invalid(format!(
-            "関 {seki}: 証拠タイプ otel は v0.1 では未実装(契約形式 v0 では予約)"
-        ))),
+        "otel" => {
+            let field = |key: &str| -> Result<String> {
+                let v = t
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if v.is_empty() {
+                    return Err(MonbanError::Invalid(format!(
+                        "関 {seki}: otel の {key} は非空の文字列必須"
+                    )));
+                }
+                Ok(v)
+            };
+            let vault = field("vault")?;
+            let span = field("span")?;
+            let mut attrs_match = Vec::new();
+            if let Some(arr) = t.get("attrs_match").and_then(|v| v.as_array()) {
+                for a in arr {
+                    match a.as_str() {
+                        Some(s) if !s.is_empty() => attrs_match.push(s.to_string()),
+                        _ => {
+                            return Err(MonbanError::Invalid(format!(
+                                "関 {seki}: attrs_match は非空の属性名の列"
+                            )))
+                        }
+                    }
+                }
+            }
+            Ok(EvidenceReq::Otel {
+                vault,
+                span,
+                attrs_match,
+            })
+        }
         other => Err(MonbanError::Invalid(format!(
             "関 {seki}: 未知の証拠タイプ \"{other}\""
         ))),

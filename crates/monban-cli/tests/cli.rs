@@ -65,15 +65,13 @@ title = "テストが通っている"
 "#;
 
 fn declare(root: &Path) -> String {
-    std::fs::write(root.join("seika.md"), "成果物\n").unwrap();
+    declare_with(root, "tests-pass", "成果物\n")
+}
+
+fn declare_with(root: &Path, seki: &str, content: &str) -> String {
+    std::fs::write(root.join("seika.md"), content).unwrap();
     let out = monban(root)
-        .args([
-            "declare",
-            "tests-pass",
-            "テストが通りました",
-            "--evidence",
-            "seika.md",
-        ])
+        .args(["declare", seki, "できました", "--evidence", "seika.md"])
         .output()
         .unwrap();
     assert!(
@@ -105,7 +103,7 @@ fn contract_without_evidence_is_rejected() {
 }
 
 #[test]
-fn otel_kind_is_reserved_in_v01() {
+fn otel_without_vault_or_span_is_rejected() {
     let ws = workspace(
         "schema = \"monban/0\"\n[[seki]]\nname = \"o\"\ntitle = \"otel\"\n[[seki.evidence]]\nkind = \"otel\"\n",
     );
@@ -113,7 +111,7 @@ fn otel_kind_is_reserved_in_v01() {
         .arg("contract")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("未実装"));
+        .stderr(predicates::str::contains("非空"));
 }
 
 #[test]
@@ -278,6 +276,170 @@ fn check_does_not_touch_the_ledger() {
 #[test]
 fn check_reports_failure() {
     let ws = workspace(FAIL_CONTRACT);
+    monban(&ws.0).arg("check").assert().code(1);
+}
+
+// ---- OTel 証拠(v0.3): 蔵の span と宣言時の成果物写しの突き合わせ ----
+
+const OTEL_CONTRACT: &str = r#"
+schema = "monban/0"
+
+[[seki]]
+name = "report-honest"
+title = "レポートの数字は実行過程に裏付けがある"
+
+  [[seki.evidence]]
+  kind = "otel"
+  vault = "vault.jsonl"
+  span = "read_sources"
+  attrs_match = ["lines.total"]
+"#;
+
+fn write_vault(root: &Path, totals: &[&str]) {
+    let lines: Vec<String> = totals
+        .iter()
+        .map(|t| {
+            serde_json::json!({"resourceSpans": [{"scopeSpans": [{"spans": [{
+                "name": "read_sources",
+                "attributes": [{"key": "lines.total", "value": {"intValue": t}}]
+            }]}]}]})
+            .to_string()
+        })
+        .collect();
+    std::fs::write(root.join("vault.jsonl"), lines.join("\n") + "\n").unwrap();
+}
+
+#[test]
+fn otel_contract_is_listed() {
+    let ws = workspace(OTEL_CONTRACT);
+    monban(&ws.0)
+        .arg("contract")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("otel: span \"read_sources\""));
+}
+
+#[test]
+fn otel_verify_pass_issues_tegata() {
+    let ws = workspace(OTEL_CONTRACT);
+    write_vault(&ws.0, &["4106"]);
+    let id = declare_with(&ws.0, "report-honest", "合計: 4106 行(13 ファイル)\n");
+    monban(&ws.0)
+        .args(["verify", &id])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("手形"));
+    let ev = events(&ws.0);
+    let verify = ev.last().unwrap();
+    assert_eq!(verify.body["verdict"], "pass");
+    assert_eq!(verify.body["checks"][0]["kind"], "otel");
+    assert_eq!(verify.body["checks"][0]["spans_found"], 1);
+    // 検分の証跡(transcript)が蔵に納まっている
+    assert!(!verify.evidence.is_empty());
+}
+
+#[test]
+fn otel_verify_fails_when_report_disagrees_with_vault() {
+    // demo2 第四幕の変形: 蔵は 4106 を証言、レポートは 9999 を主張
+    let ws = workspace(OTEL_CONTRACT);
+    write_vault(&ws.0, &["4106"]);
+    let id = declare_with(&ws.0, "report-honest", "合計: 9999 行\n");
+    let out = monban(&ws.0).args(["verify", &id]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(events(&ws.0).last().unwrap().body["verdict"], "fail");
+}
+
+#[test]
+fn otel_verify_fails_on_tampered_resend() {
+    // demo2 第二幕: 追記専用の蔵では、矛盾する再送が自分の通り道を塞ぐ
+    let ws = workspace(OTEL_CONTRACT);
+    write_vault(&ws.0, &["4106", "9999"]);
+    let id = declare_with(&ws.0, "report-honest", "合計: 9999 行\n");
+    let out = monban(&ws.0).args(["verify", &id]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(events(&ws.0).last().unwrap().body["verdict"], "fail");
+}
+
+#[test]
+fn otel_verify_fails_when_span_is_absent() {
+    let ws = workspace(OTEL_CONTRACT);
+    std::fs::write(ws.0.join("vault.jsonl"), "").unwrap();
+    let id = declare_with(&ws.0, "report-honest", "合計: 4106 行\n");
+    let out = monban(&ws.0).args(["verify", &id]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+}
+
+#[test]
+fn otel_matches_declared_copy_not_working_tree() {
+    // 宣言後に成果物を書き替えても、突き合わせ先は蔵(objects/)の写しのまま
+    let ws = workspace(OTEL_CONTRACT);
+    write_vault(&ws.0, &["4106"]);
+    let id = declare_with(&ws.0, "report-honest", "合計: 4106 行\n");
+    std::fs::write(ws.0.join("seika.md"), "合計: 9999 行(改竄)\n").unwrap();
+    monban(&ws.0).args(["verify", &id]).assert().success();
+}
+
+#[test]
+fn otel_verify_fails_when_declared_copy_is_lost() {
+    let ws = workspace(OTEL_CONTRACT);
+    write_vault(&ws.0, &["4106"]);
+    let id = declare_with(&ws.0, "report-honest", "合計: 4106 行\n");
+    // 蔵から成果物の写しを消す(7/17 の証拠消失の再現)
+    let claim = events(&ws.0).into_iter().next().unwrap();
+    std::fs::remove_file(ws.0.join("ledger/objects").join(&claim.evidence[0].sha256)).unwrap();
+    let out = monban(&ws.0).args(["verify", &id]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let ev = events(&ws.0);
+    let verify = ev.last().unwrap();
+    assert_eq!(verify.body["verdict"], "fail");
+    assert!(verify.body["reason"].as_str().unwrap().contains("写し"));
+}
+
+#[test]
+fn otel_and_toolchain_combine_as_and() {
+    // 「やったか」は otel、「動くか」は toolchain — 同じ関に AND で並ぶ
+    let contract = r#"
+schema = "monban/0"
+
+[[seki]]
+name = "report-honest"
+title = "裏付けがあり、かつ検査が通る"
+
+  [[seki.evidence]]
+  kind = "otel"
+  vault = "vault.jsonl"
+  span = "read_sources"
+  attrs_match = ["lines.total"]
+
+  [[seki.evidence]]
+  kind = "toolchain"
+  cmd = ["false"]
+"#;
+    let ws = workspace(contract);
+    write_vault(&ws.0, &["4106"]);
+    let id = declare_with(&ws.0, "report-honest", "合計: 4106 行\n");
+    let out = monban(&ws.0).args(["verify", &id]).output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "otel が通っても toolchain が止める"
+    );
+    let ev = events(&ws.0);
+    let verify = ev.last().unwrap();
+    assert_eq!(verify.body["checks"].as_array().unwrap().len(), 2);
+    assert_eq!(verify.body["checks"][0]["ok"], true);
+    assert_eq!(verify.body["checks"][1]["ok"], false);
+}
+
+#[test]
+fn otel_check_is_presence_only_and_writes_nothing() {
+    let ws = workspace(OTEL_CONTRACT);
+    write_vault(&ws.0, &["only-in-vault-not-in-any-artifact"]);
+    // 予行: span が在れば ok(attrs_match は宣言の成果物が要るため改めに委ねる)
+    monban(&ws.0).arg("check").assert().success();
+    assert!(events(&ws.0).is_empty());
+    // span が無ければ予行でも止まる
+    std::fs::write(ws.0.join("vault.jsonl"), "").unwrap();
     monban(&ws.0).arg("check").assert().code(1);
 }
 
